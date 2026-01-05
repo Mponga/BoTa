@@ -1,6 +1,6 @@
 streamlit
 openai
-re
 numpy
 json
 os
+annotations
