@@ -1,6 +1,5 @@
 streamlit
 openai
 numpy
-json
-os
-annotations
+pypdf
+Pillow
