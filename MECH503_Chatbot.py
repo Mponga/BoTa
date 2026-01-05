@@ -481,7 +481,7 @@ if prompt := st.chat_input("Type your question…"):
             # ✅ Consume quota AFTER the call completes
             # For streaming, exact tokens aren't available here in your current setup.
             quota_consume_after_call(tokens_used=0)
-            st.rerun()
+            
 
         # Also save to chat history
         st.session_state.chat.append({"role": "assistant", "content": answer_accum})
