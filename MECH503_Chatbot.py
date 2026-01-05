@@ -35,8 +35,31 @@ import os
 from PIL import Image
 
 from glob import glob
-import re
 
+# ---------------------------------------------------------
+import hmac
+
+def require_password():
+    if "auth_ok" not in st.session_state:
+        st.session_state.auth_ok = False
+
+    if st.session_state.auth_ok:
+        return
+
+    st.title("MECH503 Course Chatbot")
+    pw = st.text_input("Enter course password", type="password")
+
+    if st.button("Enter"):
+        expected = st.secrets.get("COURSE_PASSWORD", "")
+        if expected and hmac.compare_digest(pw, expected):
+            st.session_state.auth_ok = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+
+    st.stop()
+
+require_password()
 # ---------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------
