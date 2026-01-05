@@ -37,6 +37,8 @@ from PIL import Image
 from glob import glob
 
 # ---------------------------------------------------------
+# Password gate
+# ---------------------------------------------------------
 import hmac
 
 def require_password():
@@ -60,6 +62,103 @@ def require_password():
     st.stop()
 
 require_password()
+# ---------------------------------------------------------
+# Quota manager
+# ---------------------------------------------------------
+from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+APP_TZ = ZoneInfo("America/Vancouver")
+
+APP_DIR = Path(__file__).resolve().parent
+QUOTA_DIR = APP_DIR / ".quota"
+QUOTA_FILE = QUOTA_DIR / "usage.json"
+
+
+def _today_key() -> str:
+    return datetime.now(APP_TZ).strftime("%Y-%m-%d")
+
+
+def _load_usage() -> dict:
+    QUOTA_DIR.mkdir(parents=True, exist_ok=True)
+    if not QUOTA_FILE.exists():
+        return {}
+    try:
+        return json.loads(QUOTA_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        # If file ever gets corrupted, reset it
+        return {}
+
+
+def _save_usage(data: dict) -> None:
+    QUOTA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = QUOTA_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(QUOTA_FILE)  # atomic-ish replace
+
+
+def _get_limits() -> tuple[int, int, int]:
+    max_q_session = int(st.secrets.get("MAX_Q_PER_SESSION", 15))
+    max_q_day = int(st.secrets.get("MAX_Q_PER_DAY", 250))
+    max_tokens_day = int(st.secrets.get("MAX_TOKENS_PER_DAY", 300000))
+    return max_q_session, max_q_day, max_tokens_day
+
+
+def quota_check_before_call() -> None:
+    """Call this right before you call OpenAI."""
+    max_q_session, max_q_day, max_tokens_day = _get_limits()
+
+    # Session caps (per device/browser session)
+    st.session_state.setdefault("q_count_session", 0)
+    if st.session_state["q_count_session"] >= max_q_session:
+        st.warning("Session limit reached for today. Please try again later.")
+        st.stop()
+
+    # Global daily caps (shared across everyone using the app)
+    usage = _load_usage()
+    day = _today_key()
+    day_rec = usage.get(day, {"questions": 0, "tokens": 0})
+
+    if day_rec["questions"] >= max_q_day:
+        st.warning("Daily class quota reached. Please try again tomorrow.")
+        st.stop()
+
+    if day_rec["tokens"] >= max_tokens_day:
+        st.warning("Daily token quota reached. Please try again tomorrow.")
+        st.stop()
+
+
+def quota_consume_after_call(tokens_used: int) -> None:
+    """Call this right after you get an OpenAI response."""
+    # Increment session question count
+    st.session_state["q_count_session"] = st.session_state.get("q_count_session", 0) + 1
+
+    # Increment global daily usage
+    usage = _load_usage()
+    day = _today_key()
+    day_rec = usage.get(day, {"questions": 0, "tokens": 0})
+    day_rec["questions"] += 1
+    day_rec["tokens"] += int(tokens_used)
+    usage[day] = day_rec
+    _save_usage(usage)
+
+
+def extract_total_tokens(response) -> int:
+    """Defensive extraction across SDK variations."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return 0
+    # openai SDK often provides usage.total_tokens as an int-like field
+    total = getattr(usage, "total_tokens", None)
+    if total is not None:
+        return int(total)
+    # fallback if usage is dict-like
+    try:
+        return int(usage.get("total_tokens", 0))
+    except Exception:
+        return 0
+
 # ---------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------
@@ -314,6 +413,9 @@ if prompt := st.chat_input("Type your question…"):
         placeholder = st.empty()
         answer_accum = ""
         with st.spinner("Thinking…"):
+            # ✅ Quota check goes here (right before OpenAI call)
+            quota_check_before_call()
+
             resp = client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=messages,
@@ -324,6 +426,10 @@ if prompt := st.chat_input("Type your question…"):
                 token = chunk.choices[0].delta.content or ""
                 answer_accum += token
                 placeholder.markdown(_fmt_math(answer_accum), unsafe_allow_html=True)
+            
+            # ✅ Consume quota AFTER the call completes
+            # For streaming, exact tokens aren't available here in your current setup.
+            quota_consume_after_call(tokens_used=0)
 
         # Also save to chat history
         st.session_state.chat.append({"role": "assistant", "content": answer_accum})
