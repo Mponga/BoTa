@@ -37,32 +37,6 @@ from PIL import Image
 from glob import glob
 
 # ---------------------------------------------------------
-# Password gate
-# ---------------------------------------------------------
-import hmac
-
-def require_password():
-    if "auth_ok" not in st.session_state:
-        st.session_state.auth_ok = False
-
-    if st.session_state.auth_ok:
-        return
-
-    st.title("MECH503 Course Chatbot")
-    pw = st.text_input("Enter course password", type="password")
-
-    if st.button("Enter"):
-        expected = st.secrets.get("COURSE_PASSWORD", "")
-        if expected and hmac.compare_digest(pw, expected):
-            st.session_state.auth_ok = True
-            st.rerun()
-        else:
-            st.error("Incorrect password.")
-
-    st.stop()
-
-require_password()
-# ---------------------------------------------------------
 # Quota manager
 # ---------------------------------------------------------
 from pathlib import Path
@@ -158,6 +132,83 @@ def extract_total_tokens(response) -> int:
         return int(usage.get("total_tokens", 0))
     except Exception:
         return 0
+        
+# ---------------------------------------------------------
+# Usage remaining function
+# ---------------------------------------------------------
+def get_usage_snapshot() -> tuple[dict, int, int, int]:
+    """
+    Returns (day_record, max_q_session, max_q_day, max_tokens_day)
+    """
+    max_q_session, max_q_day, max_tokens_day = _get_limits()
+    usage = _load_usage()
+    day = _today_key()
+    day_rec = usage.get(day, {"questions": 0, "tokens": 0})
+    return day_rec, max_q_session, max_q_day, max_tokens_day
+
+
+def render_usage_meter(location: str = "sidebar") -> None:
+    """
+    Shows remaining budget to students.
+    location: "sidebar" or "main"
+    """
+    day_rec, max_q_session, max_q_day, max_tokens_day = get_usage_snapshot()
+
+    q_session_used = st.session_state.get("q_count_session", 0)
+    q_session_left = max(0, max_q_session - q_session_used)
+
+    q_day_used = int(day_rec.get("questions", 0))
+    q_day_left = max(0, max_q_day - q_day_used)
+
+    tok_day_used = int(day_rec.get("tokens", 0))
+    tok_day_left = max(0, max_tokens_day - tok_day_used)
+
+    def block():
+        st.caption("Usage remaining")
+        st.progress(min(1.0, q_session_used / max_q_session) if max_q_session else 0.0)
+        st.write(f"Session questions: **{q_session_left}** left (used {q_session_used}/{max_q_session})")
+
+        st.progress(min(1.0, q_day_used / max_q_day) if max_q_day else 0.0)
+        st.write(f"Class questions today: **{q_day_left}** left (used {q_day_used}/{max_q_day})")
+
+        st.progress(min(1.0, tok_day_used / max_tokens_day) if max_tokens_day else 0.0)
+        st.write(f"Class tokens today: **{tok_day_left:,}** left (used {tok_day_used:,}/{max_tokens_day:,})")
+
+    if location == "sidebar":
+        with st.sidebar:
+            block()
+    else:
+        block()
+
+# ---------------------------------------------------------
+# Password gate
+# ---------------------------------------------------------
+import hmac
+
+def require_password():
+    if "auth_ok" not in st.session_state:
+        st.session_state.auth_ok = False
+
+    if st.session_state.auth_ok:
+        return
+
+    st.title("MECH503 Course Chatbot")
+    pw = st.text_input("Enter course password", type="password")
+
+    if st.button("Enter"):
+        expected = st.secrets.get("COURSE_PASSWORD", "")
+        if expected and hmac.compare_digest(pw, expected):
+            st.session_state.auth_ok = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+
+    st.stop()
+
+require_password()
+
+render_usage_meter("sidebar")
+
 
 # ---------------------------------------------------------
 # Configuration
@@ -430,6 +481,7 @@ if prompt := st.chat_input("Type your question…"):
             # ✅ Consume quota AFTER the call completes
             # For streaming, exact tokens aren't available here in your current setup.
             quota_consume_after_call(tokens_used=0)
+            st.rerun()
 
         # Also save to chat history
         st.session_state.chat.append({"role": "assistant", "content": answer_accum})
