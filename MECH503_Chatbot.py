@@ -398,7 +398,7 @@ def render_with_images(markdown_text: str):
 
 st.set_page_config(page_title="MECH 503 Chatbot", page_icon="💬")
 st.title("💬 MECH 503 Linear Elasticity Chatbot")
-st.image("static/media/image004.gif", caption="Header Image Test")
+st.image("static/media/image004.png", caption="Header Image Test")
 
 chunks, embeddings, meta = get_index()
 
